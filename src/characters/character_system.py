@@ -155,20 +155,37 @@ class CharacterSystem:
         """Get a summary of the character relationship network
         
         Returns:
-            Dict: Network summary
+            Dict: Network summary containing:
+                - characters: Total number of characters
+                - relationships: Total number of relationships
+                - groups: List of character groups
+                - central_characters: List of characters sorted by centrality
+                - relationship_density: Network density (0-1)
         """
+        # Convert sets to lists for JSON serialization
+        groups = [list(group) for group in nx.connected_components(self.relationship_graph)]
+        
+        # Calculate network metrics
+        centrality = nx.degree_centrality(self.relationship_graph)
+        density = nx.density(self.relationship_graph)
+        
         network = {
             "characters": len(self.characters),
             "relationships": self.relationship_graph.number_of_edges(),
-            "groups": [list(group) for group in nx.connected_components(self.relationship_graph)],
+            "groups": groups,
             "central_characters": [
-                {"name": name, "centrality": round(centrality, 3)}
-                for name, centrality in sorted(
-                    nx.degree_centrality(self.relationship_graph).items(),
+                {
+                    "name": name,
+                    "centrality": round(score, 3),
+                    "connections": len(list(self.relationship_graph.neighbors(name)))
+                }
+                for name, score in sorted(
+                    centrality.items(),
                     key=lambda x: x[1],
                     reverse=True
                 )
-            ]
+            ],
+            "relationship_density": round(density, 3)
         }
         return network
     
