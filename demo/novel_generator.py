@@ -35,7 +35,7 @@ book_outline_prompt = ChatPromptTemplate.from_messages([
     请生成一个包含以下字段的JSON格式输出：
     {{
         "main_theme": "书籍主题",
-        "description": "书籍整���描述", 
+        "description": "书籍完整描述", 
         "volumes": [
             {{
                 "volume_number": "卷号",
@@ -176,9 +176,10 @@ class LongTextGenerator:
             | StrOutputParser()
         )
 
-    def generate_long_text(self, topic: str, description: str, words: str) -> str:
+    def generate_long_text(self, topic: str, description: str, words: str, chapter_limit: int = None) -> str:
         logger.info(f"开始为主题「{topic}」生成长文本...")
         logger.info(f"书籍描述：{description}")
+        logger.info(f"章节限制：{chapter_limit if chapter_limit else '无'}")
         
         # 步骤1：生成整本书大纲
         logger.info("步骤1: 生成整本书大纲...")
@@ -208,6 +209,8 @@ class LongTextGenerator:
         logger.info(f"书籍大纲：\n{json.dumps(book_outline, ensure_ascii=False, indent=2)}")
         
         full_content = []
+        total_chapters = 0  # Add counter for total chapters
+        
         # 为每一卷生成内容
         for volume in book_outline["volumes"]:
             logger.info(f"开始生成第 {volume['volume_number']} 卷内容...")
@@ -226,8 +229,13 @@ class LongTextGenerator:
             # 添加卷标题
             full_content.append(f"\n# 第{volume['volume_number']}卷 {volume['volume_title']}\n\n")
             
-            # 为每个章节生成内容
+            # 为每个章节生成内容，但要检查限制
             for chapter in volume_outline["chapters"]:
+                # Check if we've reached the limit
+                if chapter_limit and total_chapters >= chapter_limit:
+                    logger.info(f"已达到章节限制 {chapter_limit}，停止生成")
+                    break
+                
                 logger.info(f"生成第 {chapter['chapter_number']} 章内容...")
                 
                 # 步骤3：生成章节详细大纲
@@ -241,10 +249,7 @@ class LongTextGenerator:
                 logger.info(f"章节详细大纲：\n{json.dumps(chapter_outline, ensure_ascii=False, indent=2)}")
                 
                 # 步骤4：扩展章节内容
-                expanded_content = self.expand_chain.invoke({
-                    "chapter_title": chapter["chapter_title"],
-                    "scenes": json.dumps(chapter_outline["scenes"], ensure_ascii=False)
-                })
+                expanded_content = self.expand_chapter_content(chapter_outline)
                 logger.info(f"章节初始内容已生成，长度：{len(expanded_content)}")
                 
                 # 步骤5：优化内容
@@ -255,6 +260,17 @@ class LongTextGenerator:
                 
                 # 添加章节内容
                 full_content.append(f"\n## 第{chapter['chapter_number']}章 {chapter['chapter_title']}\n\n{enhanced_content}\n\n")
+                
+                total_chapters += 1  # Increment counter
+                
+                # Check again after generation
+                if chapter_limit and total_chapters >= chapter_limit:
+                    logger.info(f"已达到章节限制 {chapter_limit}，停止生成")
+                    break
+            
+            # If we've hit the limit, break out of volume loop too
+            if chapter_limit and total_chapters >= chapter_limit:
+                break
         
         # 合并所有内容
         final_text = "".join(full_content)
@@ -267,6 +283,149 @@ class LongTextGenerator:
         
         return final_text
 
+    def expand_chapter_content(self, chapter_outline: dict, target_words: int = 3000) -> str:
+        """Enhanced chapter content generation using TOT approach"""
+        
+        # 首先定义所有需要的提示模板
+        self.description_prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are an Expert Description Writer specializing in vivid, 
+            detailed scene descriptions. Focus on sensory details, atmosphere, and environment. 
+            Each scene description should be at least 500 words."""),
+            ("human", "Expand this scene with rich details: {content}")
+        ])
+        
+        self.dialogue_prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are an Expert Dialogue Writer. Create natural, engaging 
+            conversations that reveal character personalities and advance the plot. 
+            Each dialogue section should be at least 400 words."""),
+            ("human", "Add meaningful dialogues to: {content}")
+        ])
+        
+        self.character_prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are an Expert Character Developer. Add internal monologues, 
+            emotional reactions, and character growth moments. Each character moment 
+            should be at least 300 words."""),
+            ("human", "Enhance character depth in: {content}")
+        ])
+        
+        def convert_to_string(content) -> str:
+            """Convert various content types to string safely"""
+            if isinstance(content, str):
+                return content
+            elif hasattr(content, 'to_string'):
+                return content.to_string()
+            elif hasattr(content, '__str__'):
+                return str(content)
+            else:
+                logger.warning(f"Unexpected content type: {type(content)}")
+                return str(content)
+        
+        def count_words(text: str) -> int:
+            return len(text.split())
+        
+        def is_valid_scene(scene: str) -> bool:
+            """Check if the scene is valid for expansion"""
+            invalid_starts = [
+                "System:", 
+                "Human:", 
+                "Assistant:", 
+                "You are", 
+                "Expert"
+            ]
+            return (
+                scene.strip() and 
+                not any(scene.strip().startswith(start) for start in invalid_starts)
+            )
+        
+        def split_into_scenes(content: str) -> List[str]:
+            """Split content into valid scenes"""
+            potential_scenes = [
+                scene.strip() 
+                for scene in content.split("\n\n") 
+                if scene.strip()
+            ]
+            return [scene for scene in potential_scenes if is_valid_scene(scene)]
+        
+        # Generate initial content
+        content = self.expand_chain.invoke({
+            "chapter_title": chapter_outline["chapter_title"],
+            "scenes": json.dumps(chapter_outline["scenes"], ensure_ascii=False)
+        })
+        content = convert_to_string(content)
+        
+        current_words = count_words(content)
+        logger.info(f"Initial content word count: {current_words}")
+        
+        # Add loop protection
+        max_iterations = 10
+        iteration_count = 0
+        last_word_count = 0
+        
+        # Iteratively expand until reaching target
+        while current_words < target_words and iteration_count < max_iterations:
+            logger.info(f"Content needs expansion, current: {current_words}/{target_words}")
+            
+            # Get valid scenes
+            scenes = split_into_scenes(content)
+            if not scenes:
+                logger.error("No valid scenes found for expansion")
+                break
+            
+            # Find shortest valid scene
+            shortest_scene = min(scenes, key=len)
+            
+            # Apply appropriate expert based on content type
+            if "对话" in shortest_scene or '"' in shortest_scene:
+                expert_prompt = self.dialogue_prompt
+                expert_type = "dialogue"
+            elif "内心" in shortest_scene or "感受" in shortest_scene:
+                expert_prompt = self.character_prompt
+                expert_type = "character"
+            else:
+                expert_prompt = self.description_prompt
+                expert_type = "description"
+                
+            logger.info(f"Selected expert type: {expert_type}")
+            logger.info(f"Shortest scene length: {len(shortest_scene)}")
+            logger.info(f"Expanding scene: {shortest_scene[:100]}...")
+            
+            # Expand the shortest scene
+            try:
+                expanded_scene = expert_prompt.invoke({
+                    "content": shortest_scene
+                })
+                expanded_scene = convert_to_string(expanded_scene)
+                
+                # Verify expansion actually added content
+                if count_words(expanded_scene) <= count_words(shortest_scene):
+                    logger.warning("Expansion didn't add content, trying different approach")
+                    iteration_count += 1
+                    continue
+                    
+                # Replace original scene with expanded version
+                content = content.replace(shortest_scene, expanded_scene)
+                
+                current_words = count_words(content)
+                logger.info(f"After expansion: {current_words}/{target_words}")
+                
+                # Check if we're making progress
+                if current_words <= last_word_count:
+                    logger.warning("No progress in word count, trying different approach")
+                    iteration_count += 1
+                
+                last_word_count = current_words
+                
+            except Exception as e:
+                logger.error(f"Error during expansion: {str(e)}")
+                iteration_count += 1
+                
+            iteration_count += 1
+        
+        if iteration_count >= max_iterations:
+            logger.warning(f"Reached maximum iterations ({max_iterations}), stopping expansion")
+        
+        return content
+
 def main():
     # 记录开始时间
     start_time = datetime.now()
@@ -276,10 +435,11 @@ def main():
     topic = "龙傲天重生录"
     description = """故事题材为都市玄幻，大致讲述一个名叫龙傲天的主角重生在有超能力的都市，但他的超能力很弱，凭借着前世的智慧，一步步成为这个世界最强者的故事。可以分成5卷，每一卷都由多个章节组成，一个章节至少3000字，请开始书写第一章和第二章的内容。"""
     words = "3000"
+    chapter_limit = 2  # Limit to first 2 chapters
     
-    result = generator.generate_long_text(topic, description, words)
+    result = generator.generate_long_text(topic, description, words, chapter_limit)
     
-    # 使用时间戳创建文件名
+    # Save result
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_file = f"novel_{timestamp}.md"
     
