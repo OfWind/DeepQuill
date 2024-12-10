@@ -23,18 +23,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 初始化LLM
-llm = ChatOpenAI(
-    model='gpt-4o',
-    api_key=os.getenv('OPENAI_API_KEY'),
-    temperature=1.0,
-    max_tokens=16384,
-)
-# llm = ChatAnthropic(
-#     model='claude-3-5-sonnet-20241022',
-#     api_key=os.getenv('ANTHROPIC_API_KEY'),
-#     temperature=0.75,
-#     max_tokens=8192,
+# llm = ChatOpenAI(
+#     model='gpt-4o',
+#     api_key=os.getenv('OPENAI_API_KEY'),
+#     temperature=1.0,
+#     max_tokens=16384,
 # )
+llm = ChatAnthropic(
+    model='claude-3-5-sonnet-20241022',
+    api_key=os.getenv('ANTHROPIC_API_KEY'),
+    temperature=0.75,
+    max_tokens=8192,
+)
 logger.info(f"LLM initialized: {llm}")
 # 步骤1：生成整本书大纲的提示词
 book_outline_prompt = ChatPromptTemplate.from_messages([
@@ -120,24 +120,46 @@ chapter_outline_prompt = ChatPromptTemplate.from_messages([
     预计字数：{word_count}
     """)
 ])
-
-# 步骤4：扩展章节内容的提示词
-expand_prompt = ChatPromptTemplate.from_messages([
-    ("system", """你是一个专业的小说内容生成专家。基于详细大纲生成具体的章节内容。
+# 步骤4: 章节内容生成
+content_generation_prompt = ChatPromptTemplate.from_messages([
+    ("system", """你是一个专业的小说内容创作者。基于章节大纲生成具体的章节内容。
     要求：
     1. 场景描写要细腻，带入感强
     2. 对话要自然，符合人物性格
     3. 情感描写要细腻
     4. 保持叙事节奏的流畅
-    5. 符合小说的整体风格
+    5. 符合小说的整体风格和主题
+    6. 内容要丰富，每个场景多多益善
+    7. 模仿网文风格，增强代入感
+    8. 每个情节点的内容尽可能的长
+     
+    限制：
+    - 不要出现如篇幅限制，字数限制，字数要求等字样
     """),
-    ("human", """请基于以下大纲生成章节内容：
+    ("human", """请基于以下大纲生成完整的章节内容：
     章节标题：{chapter_title}
-    场景概要：{scenes}
+    章节大纲：
+    {chapter_outline}
+    要求字数：{target_words}字
+    """)
+])
+# 步骤5：扩展章节内容的提示词
+expand_prompt = ChatPromptTemplate.from_messages([
+    ("system", """你是一个专业的小说内容创作者。基于章节内容扩展，增加场景，对话，情感等元素。
+    要求：
+    1. 扩展内容，增加场景，对话，情感等元素
+    2. 模仿网文风格，增强代入感
+    3. 埋下伏笔，增加悬念
+    4. 梳理剧情，增加逻辑性
+    限制：
+    - 不要出现如篇幅限制，字数限制，字数要求等字样
+    """),
+    ("human", """请基于以下内容扩展章节内容：
+    {scenes}
     """)
 ])
 
-# 步骤5：内容优化的提示词
+# 步骤6：内容优化的提示词
 enhance_prompt = ChatPromptTemplate.from_messages([
     ("system", """你是一个内容优化专家。基于已有内容进行优化和提升。
     优化要求：
@@ -146,9 +168,14 @@ enhance_prompt = ChatPromptTemplate.from_messages([
     3. 增强情感表达的打动力
     4. 提升文学性和可读性
     5. 保持风格的一致性
+    限制：
+    - 不要出现如篇幅限制，字数限制，字数要求等字样
+    - 不需要阐述优化版本的好处/优点
     """),
     ("human", "请优化以下内容：\n{content}")
 ])
+
+
 
 class LongTextGenerator:
     def __init__(self):
@@ -170,7 +197,11 @@ class LongTextGenerator:
             | llm 
             | StrOutputParser()
         )
-
+        self.content_generation_chain = (
+            content_generation_prompt
+            | llm
+            | StrOutputParser()
+        )
         self.expand_chain = (
             expand_prompt 
             | llm 
@@ -291,147 +322,41 @@ class LongTextGenerator:
         return final_text
 
     def expand_chapter_content(self, chapter_outline: dict, target_words: int = 3000) -> str:
-        """Enhanced chapter content generation using TOT approach"""
+        """Generate chapter content with length control"""
+        logger.info(f"开始生成章节内容，目标字数：{target_words}")
         
-        # 首先定义所有需要的提示模板
-        self.description_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are an Expert Description Writer specializing in vivid, 
-            detailed scene descriptions. Focus on sensory details, atmosphere, and environment. 
-            Each scene description should be at least 500 words."""),
-            ("human", "Expand this scene with rich details: {content}")
-        ])
-        
-        self.dialogue_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are an Expert Dialogue Writer. Create natural, engaging 
-            conversations that reveal character personalities and advance the plot. 
-            Each dialogue section should be at least 400 words."""),
-            ("human", "Add meaningful dialogues to: {content}")
-        ])
-        
-        self.character_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are an Expert Character Developer. Add internal monologues, 
-            emotional reactions, and character growth moments. Each character moment 
-            should be at least 300 words."""),
-            ("human", "Enhance character depth in: {content}")
-        ])
-        
-        def convert_to_string(content) -> str:
-            """Convert various content types to string safely"""
-            if isinstance(content, str):
-                return content
-            elif hasattr(content, 'to_string'):
-                return content.to_string()
-            elif hasattr(content, '__str__'):
-                return str(content)
-            else:
-                logger.warning(f"Unexpected content type: {type(content)}")
-                return str(content)
-        
-        def count_words(text: str) -> int:
-            return len(text.split())
-        
-        def is_valid_scene(scene: str) -> bool:
-            """Check if the scene is valid for expansion"""
-            invalid_starts = [
-                "System:", 
-                "Human:", 
-                "Assistant:", 
-                "You are", 
-                "Expert"
-            ]
-            return (
-                scene.strip() and 
-                not any(scene.strip().startswith(start) for start in invalid_starts)
-            )
-        
-        def split_into_scenes(content: str) -> List[str]:
-            """Split content into valid scenes"""
-            potential_scenes = [
-                scene.strip() 
-                for scene in content.split("\n\n") 
-                if scene.strip()
-            ]
-            return [scene for scene in potential_scenes if is_valid_scene(scene)]
-        
-        # Generate initial content
-        content = self.expand_chain.invoke({
+        # 首先使用content_generation_chain生成初始内容
+        initial_content = self.content_generation_chain.invoke({
             "chapter_title": chapter_outline["chapter_title"],
-            "scenes": json.dumps(chapter_outline["scenes"], ensure_ascii=False)
+            "chapter_outline": json.dumps(chapter_outline, ensure_ascii=False, indent=2),
+            "target_words": target_words
         })
-        content = convert_to_string(content)
         
-        current_words = count_words(content)
-        logger.info(f"Initial content word count: {current_words}")
-        
-        # Add loop protection
-        max_iterations = 10
-        iteration_count = 0
-        last_word_count = 0
-        
-        # Iteratively expand until reaching target
-        while current_words < target_words and iteration_count < max_iterations:
-            logger.info(f"Content needs expansion, current: {current_words}/{target_words}")
-            
-            # Get valid scenes
-            scenes = split_into_scenes(content)
-            if not scenes:
-                logger.error("No valid scenes found for expansion")
-                break
-            
-            # Find shortest valid scene
-            shortest_scene = min(scenes, key=len)
-            
-            # Apply appropriate expert based on content type
-            if "对话" in shortest_scene or '"' in shortest_scene:
-                expert_prompt = self.dialogue_prompt
-                expert_type = "dialogue"
-            elif "内心" in shortest_scene or "感受" in shortest_scene:
-                expert_prompt = self.character_prompt
-                expert_type = "character"
-            else:
-                expert_prompt = self.description_prompt
-                expert_type = "description"
-                
-            logger.info(f"Selected expert type: {expert_type}")
-            logger.info(f"Shortest scene length: {len(shortest_scene)}")
-            logger.info(f"Expanding scene: {shortest_scene[:100]}...")
-            
-            # Expand the shortest scene
-            try:
-                expanded_scene = expert_prompt.invoke({
-                    "content": shortest_scene
+        current_length = len(initial_content)
+        logger.info(f"初始内容生成完成，当前字数：{current_length}")
+        logger.info(f"初始内容：\n{initial_content}")
+
+        # 如果内容长度不足，使用expand_chain扩展
+        if current_length < target_words:
+            logger.info("内容长度不足，开始扩展...")
+            expanded_content = self.expand_chain.invoke({
+                "scenes": initial_content
+            })
+            current_length = len(expanded_content)
+            logger.info(f"内容扩展完成，当前字数：{current_length}")
+            logger.info(f"扩展内容：\n{expanded_content}")
+            # 如果扩展后仍不足，使用enhance_chain优化
+            if current_length < target_words:
+                logger.info("内容仍需优化...")
+                final_content = self.enhance_chain.invoke({
+                    "content": expanded_content
                 })
-                expanded_scene = convert_to_string(expanded_scene)
-                
-                # Verify expansion actually added content
-                if count_words(expanded_scene) <= count_words(shortest_scene):
-                    logger.warning("Expansion didn't add content, trying different approach")
-                    iteration_count += 1
-                    continue
-                    
-                # Replace original scene with expanded version
-                content = content.replace(shortest_scene, expanded_scene)
-                
-                current_words = count_words(content)
-                logger.info(f"After expansion: {current_words}/{target_words}")
-                
-                # Check if we're making progress
-                if current_words <= last_word_count:
-                    logger.warning("No progress in word count, trying different approach")
-                    iteration_count += 1
-                
-                last_word_count = current_words
-                
-            except Exception as e:
-                logger.error(f"Error during expansion: {str(e)}")
-                iteration_count += 1
-                
-            iteration_count += 1
+                logger.info(f"内容优化完成，最终字数：{len(final_content)}")
+                logger.info(f"优化内容：\n{final_content}")
+                return final_content
+            return expanded_content
         
-        if iteration_count >= max_iterations:
-            logger.warning(f"Reached maximum iterations ({max_iterations}), stopping expansion")
-        
-        return content
+        return initial_content
 
 import os
 
