@@ -433,6 +433,8 @@ class LongTextGenerator:
         
         return content
 
+import os
+
 def main():
     # 记录开始时间
     start_time = datetime.now()
@@ -448,7 +450,9 @@ def main():
     
     # Save result
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = f"novel_{timestamp}.md"
+    output_dir = "demo/novel_md"
+    os.makedirs(output_dir, exist_ok=True)  # Create directory if it doesn't exist
+    output_file = os.path.join(output_dir, f"novel_{timestamp}.md")
     
     # 将结果保存到文件
     with open(output_file, "w", encoding="utf-8") as f:
