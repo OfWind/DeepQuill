@@ -1,4 +1,5 @@
 from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from typing import List, Dict
@@ -26,8 +27,14 @@ llm = ChatOpenAI(
     model='gpt-4o',
     api_key=os.getenv('OPENAI_API_KEY'),
     temperature=1.0,
-
+    max_tokens=16384,
 )
+# llm = ChatAnthropic(
+#     model='claude-3-5-sonnet-20241022',
+#     api_key=os.getenv('ANTHROPIC_API_KEY'),
+#     temperature=0.75,
+#     max_tokens=8192,
+# )
 logger.info(f"LLM initialized: {llm}")
 # 步骤1：生成整本书大纲的提示词
 book_outline_prompt = ChatPromptTemplate.from_messages([
@@ -251,15 +258,15 @@ class LongTextGenerator:
                 # 步骤4：扩展章节内容
                 expanded_content = self.expand_chapter_content(chapter_outline)
                 logger.info(f"章节初始内容已生成，长度：{len(expanded_content)}")
-                
+                logger.info(f"章节内容：\n{expanded_content}")
                 # 步骤5：优化内容
                 enhanced_content = self.enhance_chain.invoke({
                     "content": expanded_content
                 })
                 logger.info(f"章节内容优化完成，最终长度：{len(enhanced_content)}")
-                
+                logger.info(f"章节内容优化后：\n{enhanced_content}")
                 # 添加章节内容
-                full_content.append(f"\n## 第{chapter['chapter_number']}章 {chapter['chapter_title']}\n\n{enhanced_content}\n\n")
+                full_content.append(f"\n## {chapter['chapter_number']} {chapter['chapter_title']}\n\n{expanded_content}\n\n")
                 
                 total_chapters += 1  # Increment counter
                 
@@ -435,7 +442,7 @@ def main():
     topic = "龙傲天重生录"
     description = """故事题材为都市玄幻，大致讲述一个名叫龙傲天的主角重生在有超能力的都市，但他的超能力很弱，凭借着前世的智慧，一步步成为这个世界最强者的故事。可以分成5卷，每一卷都由多个章节组成，一个章节至少3000字，请开始书写第一章和第二章的内容。"""
     words = "3000"
-    chapter_limit = 2  # Limit to first 2 chapters
+    chapter_limit = 1  # Limit to first 2 chapters
     
     result = generator.generate_long_text(topic, description, words, chapter_limit)
     
@@ -453,6 +460,7 @@ def main():
     logger.info(f"结束运行时间: {end_time}")
     logger.info(f"总用时: {duration}")
     logger.info(f"文章已保存到 {output_file}")
+
 
 if __name__ == "__main__":
     main()
