@@ -12,6 +12,7 @@ from prompts import extract_twitter_username_prompt, mock_system_message,extract
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, FunctionMessage, ToolMessage
 from pydantic import BaseModel, Field
 from langchain.chains import LLMChain
+from langchain_anthropic import ChatAnthropic
 import re
 from dotenv import load_dotenv
 load_dotenv()
@@ -24,11 +25,16 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-llm = ChatOpenAI(
-    model = 'gpt-4o',
-    api_key=os.getenv('OPENAI_API_KEY'),
+# llm = ChatOpenAI(
+#     model = 'gpt-4o',
+#     api_key=os.getenv('OPENAI_API_KEY'),
+# )
+llm = ChatAnthropic(
+    model='claude-3-5-sonnet-20241022',
+    api_key=os.getenv('ANTHROPIC_API_KEY'),
+    temperature=0.75,
+    max_tokens=8192,
 )
-
 from langchain_core.tools import tool
 def extract_params(text: str):
     """

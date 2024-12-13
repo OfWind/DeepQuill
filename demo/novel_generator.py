@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # 初始化LLM
 # llm = ChatOpenAI(
-#     model='gpt-4o',
+#     model='gpt-4o-2024-11-20',
 #     api_key=os.getenv('OPENAI_API_KEY'),
 #     temperature=1.0,
 #     max_tokens=16384,
