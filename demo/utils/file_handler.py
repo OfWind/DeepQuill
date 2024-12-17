@@ -28,8 +28,13 @@ class FileHandler:
             os.makedirs(dir_path, exist_ok=True)
             
     def get_log_path(self) -> str:
-        """获取日志文件路径"""
-        return os.path.join(self.dirs["logs"], "novel.log")
+        """获取日志文件路径
+        
+        Returns:
+            str: 日志文件路径，使用日期作为文件名
+        """
+        timestamp = datetime.now().strftime("%Y%m%d")
+        return os.path.join(self.dirs["logs"], f"deepquill_{timestamp}.log")
         
     def get_outline_path(self, timestamp: str = None) -> str:
         """获取大纲文件路径
